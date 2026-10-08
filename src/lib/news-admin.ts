@@ -1,6 +1,7 @@
-import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { readAdminSession } from "@/lib/admin-auth";
+import { openDesignatedAdmin } from "@/lib/designated-admin";
 import { readNewsLink } from "@/lib/news-link";
 import type { PublicNews } from "@/lib/public-news";
 
@@ -41,37 +42,6 @@ function messageOf(error: unknown) {
   if (text.includes("not found") || text.includes("0 rows")) return "소식을 찾지 못했습니다.";
   return "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 }
-
-function isNewSupabaseApiKey(value: string) {
-  return value.startsWith("sb_publishable_") || value.startsWith("sb_secret_");
-}
-
-function createSupabaseFetch(supabaseKey: string): typeof fetch {
-  return (input, init) => {
-    const headers = new Headers(typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);
-    if (init?.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-    if (isNewSupabaseApiKey(supabaseKey) && headers.get("Authorization") === `Bearer ${supabaseKey}`) {
-      headers.delete("Authorization");
-    }
-    headers.set("apikey", supabaseKey);
-    return fetch(input, { ...init, headers });
-  };
-}
-
-const openAdminDb = createServerOnlyFn(async () => {
-  const url = process.env["SUPABASE_URL"];
-  const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
-  const email = process.env["NEWS_ADMIN_EMAIL"];
-  const password = process.env["NEWS_ADMIN_PASSWORD"];
-  if (!url || !key || !email || !password) throw new Error("소식 저장 설정이 없습니다.");
-  const db = createClient(url, key, {
-    global: { fetch: createSupabaseFetch(key) },
-    auth: { persistSession: false, autoRefreshToken: false, storage: undefined },
-  });
-  const signed = await db.auth.signInWithPassword({ email, password });
-  if (signed.error) throw new Error("관리자 권한을 확인하지 못했습니다.");
-  return { db, origin: url.replace(/\/$/, "") };
-});
 
 function asNews(data: unknown): PublicNews | null {
   const row = Array.isArray(data) ? data[0] : data;
@@ -163,7 +133,7 @@ async function listNews(db: SupabaseClient) {
 export const listAdminNews = createServerFn({ method: "GET" }).handler(async () => {
   try {
     if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
-    const { db } = await openAdminDb();
+    const { db } = await openDesignatedAdmin();
     return { ok: true as const, news: await listNews(db) };
   } catch (error) {
     return fail(messageOf(error));
@@ -182,7 +152,7 @@ export const saveAdminNews = createServerFn({ method: "POST" })
       const linkUrl = requiredText(data.linkUrl ?? "", "링크를 입력해 주세요.");
       if (!isWebLink(linkUrl)) throw new Error("http 또는 https로 시작하는 웹 주소를 입력해 주세요.");
       const writtenAt = requiredDate(data.writtenAt ?? "");
-      const opened = await openAdminDb();
+      const opened = await openDesignatedAdmin();
       db = opened.db;
       let previousUrl: string | null = null;
       if (data.id) {
@@ -229,7 +199,7 @@ export const setAdminNewsFlags = createServerFn({ method: "POST" })
     try {
       if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
       if (!data.id) return fail("소식을 찾지 못했습니다.");
-      const { db } = await openAdminDb();
+      const { db } = await openDesignatedAdmin();
       const { data: saved, error } = await db
         .from("news")
         .update({ is_pinned: data.isPinned === true, is_visible: data.isVisible === true })
@@ -249,7 +219,7 @@ export const deleteAdminNews = createServerFn({ method: "POST" })
     try {
       if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
       if (!data.id) return fail("소식을 찾지 못했습니다.");
-      const { db, origin } = await openAdminDb();
+      const { db, origin } = await openDesignatedAdmin();
       const existing = await db.from("news").select("image_url").eq("id", data.id).maybeSingle();
       if (existing.error) throw existing.error;
       const removed = await db.from("news").delete().eq("id", data.id);

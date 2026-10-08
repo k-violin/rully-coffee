@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { readAdminSession } from "@/lib/admin-auth";
+import { openDesignatedAdmin } from "@/lib/designated-admin";
 import type { StoreRecord } from "@/lib/public-stores";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -39,7 +40,9 @@ function messageOf(error: unknown) {
     text.startsWith("대표") ||
     text.startsWith("작성") ||
     text.startsWith("이미지") ||
-    text.startsWith("사진")
+    text.startsWith("사진") ||
+    text.startsWith("관리자") ||
+    text.startsWith("로그인")
   ) {
     return text;
   }
@@ -71,13 +74,12 @@ function serverDb() {
   const url = process.env["SUPABASE_URL"];
   const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
   const gate = process.env["STORE_ADMIN_GATE"];
-  const prefix = process.env["STORE_IMAGE_PREFIX"];
-  if (!url || !key || !gate || !prefix) throw new Error("매장 저장 설정이 없습니다.");
+  if (!url || !key || !gate) throw new Error("매장 저장 설정이 없습니다.");
   const db = createClient(url, key, {
     global: { fetch: createSupabaseFetch(key) },
     auth: { persistSession: false, autoRefreshToken: false, storage: undefined },
   });
-  return { db, url: url.replace(/\/$/, ""), gate, prefix };
+  return { db, gate };
 }
 
 function asStore(data: unknown): StoreRecord | null {
@@ -120,13 +122,45 @@ function imageBytes(dataUrl: string, type: string) {
   return { bytes, mime, ext };
 }
 
-async function uploadImage(dataUrl: string, type: string) {
-  const { db, url, prefix } = serverDb();
+function imageObjectPath(imageUrl: string, origin: string) {
+  const marker = `${origin}/storage/v1/object/public/store-images/`;
+  if (!imageUrl.startsWith(marker)) return null;
+  const path = decodeURIComponent(imageUrl.slice(marker.length));
+  if (!path || path.includes("..")) return null;
+  return path;
+}
+
+function photosOf(store: Pick<StoreRecord, "image_url" | "image_urls">) {
+  const urls = (store.image_urls ?? []).map((url) => url.trim()).filter(Boolean);
+  return urls.length > 0 ? urls : store.image_url ? [store.image_url] : [];
+}
+
+async function uploadImage(db: SupabaseClient, origin: string, dataUrl: string, type: string) {
   const { bytes, mime, ext } = imageBytes(dataUrl, type);
-  const path = `${prefix}/${crypto.randomUUID()}.${ext}`;
+  const path = `${crypto.randomUUID()}.${ext}`;
   const { error } = await db.storage.from("store-images").upload(path, bytes, { contentType: mime, upsert: false });
   if (error) throw new Error("이미지를 저장하지 못했습니다.");
-  return `${url}/storage/v1/object/public/store-images/${path}`;
+  return { path, url: `${origin}/storage/v1/object/public/store-images/${path}` };
+}
+
+async function removeUploaded(db: SupabaseClient, paths: string[]) {
+  if (paths.length === 0) return;
+  await db.storage.from("store-images").remove(paths);
+}
+
+async function listManagedStores(db: SupabaseClient, gate: string) {
+  const { data, error } = await db.rpc("admin_list_stores", { gate });
+  if (error) throw error;
+  return asStores(data);
+}
+
+async function removeIfUnused(db: SupabaseClient, origin: string, gate: string, imageUrl: string) {
+  const path = imageObjectPath(imageUrl, origin);
+  if (!path) return;
+  const stores = await listManagedStores(db, gate);
+  const used = stores.some((store) => photosOf(store).includes(imageUrl));
+  if (used) return;
+  await db.storage.from("store-images").remove([path]);
 }
 
 function existingImageUrl(url: string | null) {
@@ -139,28 +173,35 @@ function existingImageUrl(url: string | null) {
   return text;
 }
 
-async function collectImageUrls(images: SaveImage[]) {
+async function collectImageUrls(db: SupabaseClient, origin: string, images: SaveImage[]) {
   if (!Array.isArray(images) || images.length === 0) throw new Error("사진을 한 장 이상 선택해 주세요.");
   if (images.length > 12) throw new Error("사진은 12장까지 올릴 수 있습니다.");
   const urls: string[] = [];
-  for (const image of images) {
-    if (image?.dataUrl) urls.push(await uploadImage(image.dataUrl, image.type ?? ""));
-    else {
-      const existing = existingImageUrl(image?.url ?? null);
-      if (!existing) throw new Error("사진을 다시 선택해 주세요.");
-      urls.push(existing);
+  const uploadedPaths: string[] = [];
+  try {
+    for (const image of images) {
+      if (image?.dataUrl) {
+        const uploaded = await uploadImage(db, origin, image.dataUrl, image.type ?? "");
+        uploadedPaths.push(uploaded.path);
+        urls.push(uploaded.url);
+      } else {
+        const existing = existingImageUrl(image?.url ?? null);
+        if (!existing) throw new Error("사진을 다시 선택해 주세요.");
+        urls.push(existing);
+      }
     }
+    return { urls, uploadedPaths };
+  } catch (error) {
+    await removeUploaded(db, uploadedPaths);
+    throw error;
   }
-  return urls;
 }
 
 export const listAdminStores = createServerFn({ method: "GET" }).handler(async () => {
   try {
     if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
     const { db, gate } = serverDb();
-    const { data, error } = await db.rpc("admin_list_stores", { gate });
-    if (error) throw error;
-    return { ok: true as const, stores: asStores(data) };
+    return { ok: true as const, stores: await listManagedStores(db, gate) };
   } catch (error) {
     return fail(messageOf(error));
   }
@@ -169,14 +210,23 @@ export const listAdminStores = createServerFn({ method: "GET" }).handler(async (
 export const saveAdminStore = createServerFn({ method: "POST" })
   .validator((data: SaveInput) => data)
   .handler(async ({ data }) => {
+    let uploadedPaths: string[] = [];
+    let db: SupabaseClient | null = null;
     try {
       if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
       const title = requiredText(data.title ?? "", "매장명을 입력해 주세요.");
       const content = requiredText(data.content ?? "", "매장 소개를 입력해 주세요.");
       const writtenAt = optionalDate(data.writtenAt);
       const authorName = optionalText(data.authorName);
-      const imageUrls = await collectImageUrls(data.images ?? []);
-      const { db, gate } = serverDb();
+      const gate = process.env["STORE_ADMIN_GATE"];
+      if (!gate) throw new Error("매장 저장 설정이 없습니다.");
+      const opened = await openDesignatedAdmin();
+      db = opened.db;
+      const existing = data.id ? (await listManagedStores(db, gate)).find((store) => store.id === data.id) : undefined;
+      const previous = existing ? photosOf(existing) : [];
+      const collected = await collectImageUrls(db, opened.origin, data.images ?? []);
+      uploadedPaths = collected.uploadedPaths;
+      const imageUrls = collected.urls;
       const { data: saved, error } = await db.rpc("admin_save_store", {
         gate,
         store_id: data.id,
@@ -191,8 +241,14 @@ export const saveAdminStore = createServerFn({ method: "POST" })
       if (error) throw error;
       const store = asStore(saved);
       if (!store) throw new Error("매장을 저장하지 못했습니다.");
+      uploadedPaths = [];
+      const kept = new Set(imageUrls);
+      for (const url of previous) {
+        if (!kept.has(url)) await removeIfUnused(db, opened.origin, gate, url);
+      }
       return { ok: true as const, store };
     } catch (error) {
+      if (db) await removeUploaded(db, uploadedPaths);
       return fail(messageOf(error));
     }
   });
@@ -225,9 +281,14 @@ export const deleteAdminStore = createServerFn({ method: "POST" })
     try {
       if (!(await readAdminSession())) return fail("로그인이 필요합니다.");
       if (!data.id) return fail("매장을 찾지 못했습니다.");
-      const { db, gate } = serverDb();
-      const { error } = await db.rpc("admin_delete_store", { gate, store_id: data.id });
+      const gate = process.env["STORE_ADMIN_GATE"];
+      if (!gate) throw new Error("매장 저장 설정이 없습니다.");
+      const opened = await openDesignatedAdmin();
+      const existing = (await listManagedStores(opened.db, gate)).find((store) => store.id === data.id);
+      const urls = existing ? photosOf(existing) : [];
+      const { error } = await opened.db.rpc("admin_delete_store", { gate, store_id: data.id });
       if (error) throw error;
+      for (const url of urls) await removeIfUnused(opened.db, opened.origin, gate, url);
       return { ok: true as const };
     } catch (error) {
       return fail(messageOf(error));
