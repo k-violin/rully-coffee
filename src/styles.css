@@ -1,0 +1,124 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-brand: var(--brand);
+  --color-brick: var(--brick);
+  --color-surface: var(--surface);
+}
+
+:root {
+  --radius: 0.25rem;
+  /* Page canvas matches the menu bar ivory #FBEFD9 */
+  --background: #FBEFD9;
+  --foreground: oklch(0.24 0.025 150);
+  --surface: #FBEFD9;
+  --card: #FBEFD9;
+  --card-foreground: oklch(0.24 0.025 150);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.025 150);
+  /* Swallow green #179A48 — buttons, links, and brand marks */
+  --primary: #179A48;
+  --primary-foreground: oklch(1 0 0);
+  --brand: #179A48;
+  /* Brick red #A54B3C — small accents only */
+  --brick: oklch(0.52 0.12 33);
+  --secondary: oklch(0.958 0.025 82);
+  --secondary-foreground: oklch(0.24 0.025 150);
+  --muted: oklch(0.958 0.025 82);
+  --muted-foreground: oklch(0.45 0.03 120);
+  --accent: oklch(0.94 0.03 100);
+  --accent-foreground: oklch(0.24 0.025 150);
+  --destructive: oklch(0.52 0.17 28);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.89 0.012 84);
+  --input: oklch(0.82 0.015 84);
+  --ring: #179A48;
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  html { scroll-behavior: smooth; background-color: var(--color-background); }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    word-break: keep-all;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+}
+
+.home-page {
+  --background: oklch(1 0 0);
+  --surface: oklch(0.982 0.018 84);
+  --card: oklch(1 0 0);
+  background-color: var(--background);
+}
+
+@utility container-site {
+  width: 100%;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+  @media (width >= 768px) { padding-inline: 2.5rem; }
+}
+
+@utility eyebrow {
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brick);
+  font-weight: 600;
+}
+
+@utility h-display {
+  font-size: clamp(1.9rem, 3.6vw, 2.9rem);
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+@utility h-section {
+  font-size: clamp(1.4rem, 2.4vw, 1.9rem);
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+@utility section-y {
+  padding-block: 4.5rem;
+  @media (width >= 768px) { padding-block: 7rem; }
+}
