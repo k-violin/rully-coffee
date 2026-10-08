@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, Menu, X, ExternalLink } from "lucide-react";
 import { ConsultButton } from "./consult";
@@ -44,6 +44,67 @@ function ExternalLeaf({ leaf, className }: { leaf: NavLeaf; className?: string }
   );
 }
 
+function DesktopSubmenu({ item, linkCls }: { item: Extract<NavItem, { children: NavChild[] }>; linkCls: string }) {
+  const [openMenu, setOpenMenu] = useState(false);
+  const holdClosed = useRef(false);
+  const openMenuIfAllowed = () => {
+    if (!holdClosed.current) setOpenMenu(true);
+  };
+  const closeMenu = () => {
+    holdClosed.current = true;
+    setOpenMenu(false);
+  };
+  const release = () => {
+    holdClosed.current = false;
+    setOpenMenu(false);
+  };
+  return (
+    <div
+      className="relative"
+      onMouseEnter={openMenuIfAllowed}
+      onMouseLeave={release}
+      onFocus={openMenuIfAllowed}
+      onBlur={(event) => {
+        const menu = event.currentTarget;
+        if (menu.contains(event.relatedTarget as Node | null)) return;
+        setOpenMenu(false);
+        requestAnimationFrame(() => {
+          if (!menu.contains(document.activeElement)) holdClosed.current = false;
+        });
+      }}
+    >
+      <Link
+        to={item.children[0]?.to ?? "/franchise"}
+        className={`${linkCls} inline-flex items-center gap-1`}
+        aria-haspopup="true"
+        aria-expanded={openMenu}
+        onClick={closeMenu}
+      >
+        {item.label}
+        <ChevronDown aria-hidden className={`size-4 transition-transform ${openMenu ? "rotate-180" : ""}`} />
+      </Link>
+      <div
+        className={`absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 transition-opacity ${openMenu ? "visible opacity-100" : "invisible opacity-0"}`}
+      >
+        <ul className="min-w-36 border bg-white py-2 shadow-sm">
+          {item.children.map((c) => (
+            <li key={c.to}>
+              <Link
+                to={c.to}
+                onClick={closeMenu}
+                className="block whitespace-nowrap px-5 py-2.5 text-[15px] text-foreground/80 transition-colors hover:bg-primary hover:text-white"
+                activeProps={{ className: "text-primary font-semibold" }}
+              >
+                {c.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 export function Header() {
   const [open, setOpen] = useState(false);
   const [openSub, setOpenSub] = useState(false);
@@ -55,31 +116,7 @@ export function Header() {
         <nav className="hidden items-center gap-8 lg:flex" aria-label="주 메뉴">
           {nav.map((n) =>
             "children" in n ? (
-              <div key={n.label} className="group relative">
-                <Link
-                  to={n.children[0]?.to ?? "/franchise"}
-                  className={`${linkCls} inline-flex items-center gap-1`}
-                  aria-haspopup="true"
-                >
-                  {n.label}
-                  <ChevronDown aria-hidden className="size-4 transition-transform group-hover:rotate-180" />
-                </Link>
-                <div className="invisible absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 opacity-0 transition-opacity group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
-                  <ul className="min-w-36 border bg-white py-2 shadow-sm">
-                    {n.children.map((c) => (
-                      <li key={c.to}>
-                        <Link
-                          to={c.to}
-                          className="block whitespace-nowrap px-5 py-2.5 text-[15px] text-foreground/80 transition-colors hover:bg-primary hover:text-white"
-                          activeProps={{ className: "text-primary font-semibold" }}
-                        >
-                          {c.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+              <DesktopSubmenu key={n.label} item={n} linkCls={linkCls} />
             ) : n.to ? (
               <Link key={n.label} to={n.to} className={linkCls} activeProps={{ className: "text-primary font-semibold" }}>
                 {n.label}
